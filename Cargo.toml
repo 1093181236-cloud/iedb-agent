@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "time"] }
 hyper = { version = "1", default-features = false, features = ["server", "http1"] }
-hyper-util = "0.1"
+hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
 bitcode = { version = "0.6", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
