@@ -959,7 +959,9 @@ dependencies = [
 name = "iedb-agent"
 version = "0.1.0"
 dependencies = [
+ "aws-credential-types",
  "aws-sigv4",
+ "aws-smithy-runtime-api",
  "bitcode",
  "bytes",
  "chrono",
