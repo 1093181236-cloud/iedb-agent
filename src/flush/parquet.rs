@@ -199,3 +199,120 @@ pub fn flush_chunks_to_parquet(table: &Table, chunks: &[&Chunk]) -> Result<Vec<u
 
     Ok(buf)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::buffer::chunk::{Chunk, FieldDef, FieldType, FieldValue, Row, TableSchema};
+    use bytes::Bytes;
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+    use parquet::record::RowAccessor;
+
+    fn make_test_table_with_data() -> (Table, Chunk) {
+        let schema = TableSchema {
+            tag_keys: vec!["host".to_string()],
+            field_defs: vec![
+                FieldDef {
+                    name: "cpu".to_string(),
+                    value_type: FieldType::F64,
+                },
+                FieldDef {
+                    name: "mem".to_string(),
+                    value_type: FieldType::F64,
+                },
+            ],
+        };
+
+        let table = Table {
+            name: "metrics".to_string(),
+            schema,
+            chunks: Vec::new(),
+        };
+
+        let mut chunk = Chunk::new(0);
+        chunk.rows.push(Row {
+            time: 100,
+            tag_values: vec!["srv01".to_string()],
+            field_values: vec![Some(FieldValue::F64(0.5)), Some(FieldValue::F64(0.8))],
+        });
+        chunk.rows.push(Row {
+            time: 200,
+            tag_values: vec!["srv02".to_string()],
+            field_values: vec![Some(FieldValue::F64(0.3)), Some(FieldValue::F64(0.6))],
+        });
+        chunk.rows.push(Row {
+            time: 300,
+            tag_values: vec!["srv01".to_string()],
+            field_values: vec![Some(FieldValue::F64(0.9)), Some(FieldValue::F64(0.95))],
+        });
+
+        (table, chunk)
+    }
+
+    #[test]
+    fn test_parquet_round_trip() {
+        let (table, chunk) = make_test_table_with_data();
+        let expected_row_count = chunk.rows.len();
+
+        let parquet_bytes =
+            flush_chunks_to_parquet(&table, &[&chunk]).expect("flush_chunks_to_parquet");
+
+        // Read back the parquet file
+        let bytes = Bytes::from(parquet_bytes);
+        let reader = SerializedFileReader::new(bytes).expect("SerializedFileReader");
+
+        let metadata = reader.metadata();
+        assert!(metadata.num_row_groups() > 0);
+        assert_eq!(metadata.file_metadata().num_rows() as usize, expected_row_count);
+
+        // Iterate rows and verify
+        let mut row_iter = reader.get_row_iter(None).expect("get_row_iter");
+        let mut row_count = 0;
+
+        while let Some(row) = row_iter.next() {
+            let row = row.expect("read row");
+            if row_count == 0 {
+                // time=100, host=srv01, cpu=0.5, mem=0.8
+                assert_eq!(row.get_long(0).expect("get_long"), 100);
+                let host = row.get_string(1).expect("host");
+                assert_eq!(host.as_str(), "srv01");
+                assert!((row.get_double(2).expect("cpu") - 0.5).abs() < 0.001);
+                assert!((row.get_double(3).expect("mem") - 0.8).abs() < 0.001);
+            } else if row_count == 1 {
+                assert_eq!(row.get_long(0).expect("get_long"), 200);
+                let host = row.get_string(1).expect("host");
+                assert_eq!(host.as_str(), "srv02");
+                assert!((row.get_double(2).expect("cpu") - 0.3).abs() < 0.001);
+                assert!((row.get_double(3).expect("mem") - 0.6).abs() < 0.001);
+            } else if row_count == 2 {
+                assert_eq!(row.get_long(0).expect("get_long"), 300);
+                let host = row.get_string(1).expect("host");
+                assert_eq!(host.as_str(), "srv01");
+                assert!((row.get_double(2).expect("cpu") - 0.9).abs() < 0.001);
+                assert!((row.get_double(3).expect("mem") - 0.95).abs() < 0.001);
+            }
+            row_count += 1;
+        }
+
+        assert_eq!(row_count, expected_row_count);
+    }
+
+    #[test]
+    fn test_parquet_empty_chunks_error() {
+        let table = Table {
+            name: "empty".to_string(),
+            schema: TableSchema {
+                tag_keys: vec![],
+                field_defs: vec![FieldDef {
+                    name: "v".to_string(),
+                    value_type: FieldType::F64,
+                }],
+            },
+            chunks: Vec::new(),
+        };
+        let empty_chunks: &[&Chunk] = &[];
+        let result = flush_chunks_to_parquet(&table, empty_chunks);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("no chunks"));
+    }
+}

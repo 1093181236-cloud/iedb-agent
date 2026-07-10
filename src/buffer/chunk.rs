@@ -192,3 +192,128 @@ impl Table {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::buffer::chunk::{Chunk, FieldDef, FieldType, FieldValue, Row, Table, TableSchema};
+    use crate::buffer::query::query_table;
+
+    fn make_test_table() -> Table {
+        let schema = TableSchema {
+            tag_keys: vec!["host".to_string()],
+            field_defs: vec![
+                FieldDef {
+                    name: "cpu".to_string(),
+                    value_type: FieldType::F64,
+                },
+                FieldDef {
+                    name: "mem".to_string(),
+                    value_type: FieldType::F64,
+                },
+            ],
+        };
+        let mut table = Table {
+            name: "metrics".to_string(),
+            schema,
+            chunks: Vec::new(),
+        };
+
+        let mut chunk = Chunk::new(0);
+
+        // Row 0: host=srv01, time=100, cpu=0.5, mem=0.8
+        let row0 = Row {
+            time: 100,
+            tag_values: vec!["srv01".to_string()],
+            field_values: vec![Some(FieldValue::F64(0.5)), Some(FieldValue::F64(0.8))],
+        };
+        chunk.rows.push(row0);
+        table.build_tag_index(&mut chunk, 0, &["srv01".to_string()]);
+
+        // Row 1: host=srv02, time=200, cpu=0.3, mem=0.6
+        let row1 = Row {
+            time: 200,
+            tag_values: vec!["srv02".to_string()],
+            field_values: vec![Some(FieldValue::F64(0.3)), Some(FieldValue::F64(0.6))],
+        };
+        chunk.rows.push(row1);
+        table.build_tag_index(&mut chunk, 1, &["srv02".to_string()]);
+
+        // Row 2: host=srv01, time=300, cpu=0.9, mem=0.95
+        let row2 = Row {
+            time: 300,
+            tag_values: vec!["srv01".to_string()],
+            field_values: vec![Some(FieldValue::F64(0.9)), Some(FieldValue::F64(0.95))],
+        };
+        chunk.rows.push(row2);
+        table.build_tag_index(&mut chunk, 2, &["srv01".to_string()]);
+
+        // Row 3: host=srv03, time=400, cpu=0.1, mem=0.2
+        let row3 = Row {
+            time: 400,
+            tag_values: vec!["srv03".to_string()],
+            field_values: vec![Some(FieldValue::F64(0.1)), Some(FieldValue::F64(0.2))],
+        };
+        chunk.rows.push(row3);
+        table.build_tag_index(&mut chunk, 3, &["srv03".to_string()]);
+
+        // Set time bounds on the chunk explicitly
+        chunk.time_min = 100;
+        chunk.time_max = 400;
+
+        table.chunks.push(chunk);
+        table
+    }
+
+    #[test]
+    fn test_tag_filter_srv01() {
+        let table = make_test_table();
+        let results = query_table(&table, None, None, Some("host"), Some("srv01"));
+        // Should match rows 0 and 2 (host=srv01)
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].time, 100);
+        assert_eq!(results[1].time, 300);
+        assert_eq!(results[0].tags.get("host").unwrap(), "srv01");
+        assert_eq!(results[1].tags.get("host").unwrap(), "srv01");
+    }
+
+    #[test]
+    fn test_time_range_filter() {
+        let table = make_test_table();
+        let results = query_table(&table, Some(150), Some(350), None, None);
+        // Should match rows 1 and 2 (time 200 and 300)
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].time, 200);
+        assert_eq!(results[1].time, 300);
+    }
+
+    #[test]
+    fn test_tag_and_time_filter() {
+        let table = make_test_table();
+        let results = query_table(&table, Some(50), Some(250), Some("host"), Some("srv01"));
+        // Should match only row 0: host=srv01, time=100 (row 2 has time=300, out of range)
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].time, 100);
+        assert_eq!(results[0].tags.get("host").unwrap(), "srv01");
+    }
+
+    #[test]
+    fn test_nonexistent_tag() {
+        let table = make_test_table();
+        let results = query_table(&table, None, None, Some("host"), Some("nonexistent"));
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_no_filters_returns_all() {
+        let table = make_test_table();
+        let results = query_table(&table, None, None, None, None);
+        assert_eq!(results.len(), 4);
+    }
+
+    #[test]
+    fn test_time_range_no_match() {
+        let table = make_test_table();
+        let results = query_table(&table, Some(1000), Some(2000), None, None);
+        assert!(results.is_empty());
+    }
+}
