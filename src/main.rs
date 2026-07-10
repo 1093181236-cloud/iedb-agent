@@ -1,5 +1,6 @@
 mod buffer;
 mod config;
+mod http;
 mod wal;
 
 use config::Config;

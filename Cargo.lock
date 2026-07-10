@@ -966,6 +966,7 @@ dependencies = [
  "clap",
  "crc32fast",
  "http 1.4.2",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "influxdb-line-protocol",
@@ -977,6 +978,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
