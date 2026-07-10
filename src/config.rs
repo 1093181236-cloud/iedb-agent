@@ -17,9 +17,12 @@ pub struct Config {
 pub struct ServerConfig {
     #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default = "default_max_body_bytes")]
+    pub max_body_bytes: usize,
 }
 
 fn default_port() -> u16 { 8080 }
+fn default_max_body_bytes() -> usize { 10 * 1024 * 1024 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DataConfig {
@@ -88,6 +91,10 @@ impl Config {
 
     pub fn memory_limit_bytes(&self) -> usize {
         parse_bytes(&self.flush.memory_limit)
+    }
+
+    pub fn max_body_bytes(&self) -> usize {
+        self.server.max_body_bytes
     }
 }
 
@@ -177,6 +184,8 @@ mod tests {
         assert_eq!(config.wal.max_write_buffer_ops, 100_000);
         assert_eq!(config.wal.flush_interval_secs, 1);
         assert_eq!(config.server.port, 8080);
+        assert_eq!(config.server.max_body_bytes, 10 * 1024 * 1024);
+        assert_eq!(config.max_body_bytes(), 10 * 1024 * 1024);
         assert_eq!(config.data.dir, std::path::PathBuf::from("/var/lib/iedb-agent"));
     }
 

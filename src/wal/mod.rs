@@ -13,6 +13,8 @@ pub struct WriteBatch {
     pub db_name: String,
     pub table_name: String,
     pub chunk_time: i64,
+    pub field_names: Vec<String>,
+    pub tag_keys: Vec<String>,
     pub rows: Vec<Row>,
 }
 

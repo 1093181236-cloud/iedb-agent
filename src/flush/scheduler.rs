@@ -5,6 +5,7 @@ use crate::flush::parquet::flush_chunks_to_parquet;
 use crate::flush::s3;
 use crate::wal::wal_core::WalManager;
 use reqwest::Client;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -86,21 +87,21 @@ impl SnapshotScheduler {
         let end_time_marker = ((now_ns - snapshot_interval_ns) / snapshot_interval_ns)
             * snapshot_interval_ns;
 
-        let mut chunks_to_flush: Vec<(String, String, Vec<usize>)> = Vec::new();
+        // C5 fix: collect chunk_time values instead of positional indices
+        let mut chunks_to_flush: Vec<(String, String, Vec<i64>)> = Vec::new();
 
         {
             let buf = self.buffer.lock().await;
             for (db_name, tables) in &buf.databases {
                 for (table_name, table) in tables {
-                    let indices: Vec<usize> = table
+                    let chunk_times: Vec<i64> = table
                         .chunks
                         .iter()
-                        .enumerate()
-                        .filter(|(_, c)| c.chunk_time < end_time_marker)
-                        .map(|(i, _)| i)
+                        .filter(|c| c.chunk_time < end_time_marker)
+                        .map(|c| c.chunk_time)
                         .collect();
-                    if !indices.is_empty() {
-                        chunks_to_flush.push((db_name.clone(), table_name.clone(), indices));
+                    if !chunk_times.is_empty() {
+                        chunks_to_flush.push((db_name.clone(), table_name.clone(), chunk_times));
                     }
                 }
             }
@@ -108,11 +109,14 @@ impl SnapshotScheduler {
 
         let mut flushed_count = 0;
 
-        for (db_name, table_name, chunk_indices) in &chunks_to_flush {
+        for (db_name, table_name, chunk_times) in &chunks_to_flush {
             let chunks: Vec<crate::buffer::chunk::Chunk> = {
                 let buf = self.buffer.lock().await;
                 let table = buf.get_table(db_name, table_name).ok_or("table not found")?;
-                chunk_indices.iter().map(|&i| table.chunks[i].clone()).collect()
+                chunk_times
+                    .iter()
+                    .filter_map(|ct| table.chunks.iter().find(|c| c.chunk_time == *ct).cloned())
+                    .collect()
             };
 
             let chunk_refs: Vec<&crate::buffer::chunk::Chunk> = chunks.iter().collect();
@@ -160,13 +164,13 @@ impl SnapshotScheduler {
 
             match upload_result {
                 Ok(()) => {
-                    // Success: remove chunks, write metadata, clean WAL
+                    // C5 fix: remove chunks by chunk_time, not positional index
+                    // I2 fix: track snapshot sequence for WAL cleanup
                     let snapshot_wal_seq = {
                         let mut buf = self.buffer.lock().await;
-                        for &idx in chunk_indices.iter().rev() {
-                            if let Some(table) = buf.get_table_mut(db_name, table_name) {
-                                table.chunks.remove(idx);
-                            }
+                        // Remove chunks by chunk_time value
+                        if let Some(table) = buf.get_table_mut(db_name, table_name) {
+                            table.chunks.retain(|c| !chunk_times.contains(&c.chunk_time));
                         }
 
                         // Compute safe wal seq
@@ -181,24 +185,35 @@ impl SnapshotScheduler {
                             }
                         }
                         if min_wal == u64::MAX {
-                            0
+                            // I2 fix: buffer is empty, use current_seq - 1 for cleanup
+                            // Fall back to computing from WAL state
+                            self.wal.lock().await.current_sequence().saturating_sub(1)
                         } else {
                             min_wal.saturating_sub(1)
                         }
                     };
 
-                    // Write metadata
+                    // I3 fix: write metadata with explicit fsync
                     let meta = serde_json::json!({
                         "flushed_wal_seq": snapshot_wal_seq,
                         "snapshot_ts": chrono::Utc::now().to_rfc3339(),
                     });
                     let meta_path = self.config.data.dir.join("meta").join("last_snapshot.json");
-                    let meta_str = serde_json::to_string(&meta).unwrap();
-                    std::fs::write(&meta_path, &meta_str)
+                    let meta_str = serde_json::to_string(&meta)
+                        .map_err(|e| format!("meta serialize: {}", e))?;
+
+                    // Open file explicitly, write, sync_all, then sync directory
+                    let mut f = std::fs::File::create(&meta_path)
+                        .map_err(|e| format!("meta create: {}", e))?;
+                    f.write_all(meta_str.as_bytes())
                         .map_err(|e| format!("meta write: {}", e))?;
+                    f.sync_all()
+                        .map_err(|e| format!("meta fsync: {}", e))?;
                     // fsync the directory for durability
-                    if let Ok(f) = std::fs::File::open(meta_path.parent().unwrap()) {
-                        let _ = f.sync_all();
+                    if let Some(parent) = meta_path.parent() {
+                        if let Ok(dir) = std::fs::File::open(parent) {
+                            let _ = dir.sync_all();
+                        }
                     }
 
                     // Clean WAL
@@ -289,17 +304,16 @@ mod tests {
         // end_time_marker = 600s = 600_000_000_000 ns
         let end_time_marker: i64 = 600_000_000_000;
 
-        let selected: Vec<usize> = table
+        let selected: Vec<i64> = table
             .chunks
             .iter()
-            .enumerate()
-            .filter(|(_, c)| c.chunk_time < end_time_marker)
-            .map(|(i, _)| i)
+            .filter(|c| c.chunk_time < end_time_marker)
+            .map(|c| c.chunk_time)
             .collect();
 
-        // Only chunks at 100s and 500s should be selected (indices 0, 1)
+        // Only chunks at 100s and 500s should be selected
         assert_eq!(selected.len(), 2);
-        assert_eq!(selected, vec![0, 1]);
+        assert_eq!(selected, vec![100_000_000_000, 500_000_000_000]);
     }
 
     #[test]
@@ -321,12 +335,11 @@ mod tests {
         // end_time_marker = 600s
         let end_time_marker: i64 = 600_000_000_000;
 
-        let selected: Vec<usize> = table
+        let selected: Vec<i64> = table
             .chunks
             .iter()
-            .enumerate()
-            .filter(|(_, c)| c.chunk_time < end_time_marker)
-            .map(|(i, _)| i)
+            .filter(|c| c.chunk_time < end_time_marker)
+            .map(|c| c.chunk_time)
             .collect();
 
         assert!(selected.is_empty());

@@ -54,7 +54,7 @@ pub fn staging_save(
 }
 
 fn urlencoding(s: &str) -> String {
-    s.replace(' ', "%20")
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 
 #[derive(Debug)]

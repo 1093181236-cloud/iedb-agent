@@ -47,6 +47,11 @@ impl WalManager {
         })
     }
 
+    /// Return the current WAL sequence number (next file to be written).
+    pub fn current_sequence(&self) -> u64 {
+        self.current_seq
+    }
+
     /// Buffer a write op. Returns `BufferFull` error if over limit.
     pub fn buffer_op(&mut self, op: WalOp) -> Result<(), WalError> {
         if self.op_count >= self.op_limit {
@@ -118,9 +123,20 @@ impl WalManager {
         wal_files.sort_by_key(|(seq, _)| *seq);
 
         for (seq, path) in &wal_files {
-            let data = tokio::fs::read(path).await?;
-            let contents = WalContents::deserialize_from_file(&data)
-                .map_err(|e| format!("replay seq {}: {}", seq, e))?;
+            let data = match tokio::fs::read(path).await {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(seq = seq, error = %e, "Skipping unreadable WAL file");
+                    continue;
+                }
+            };
+            let contents = match WalContents::deserialize_from_file(&data) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(seq = seq, error = %e, "Skipping corrupted WAL file");
+                    continue;
+                }
+            };
             for op in &contents.ops {
                 match op {
                     WalOp::Write(batch) => {
@@ -330,6 +346,8 @@ mod tests {
             db_name: "testdb".into(),
             table_name: "cpu".into(),
             chunk_time: 0,
+            field_names: vec!["cpu".into()],
+            tag_keys: vec!["host".into()],
             rows: vec![Row {
                 time: 100,
                 tag_values: vec!["srv01".into()],
@@ -352,6 +370,8 @@ mod tests {
             db_name: "testdb".into(),
             table_name: "cpu".into(),
             chunk_time: 42,
+            field_names: vec!["cpu".into()],
+            tag_keys: vec!["host".into()],
             rows: vec![
                 Row {
                     time: 100,
@@ -387,6 +407,8 @@ mod tests {
             db_name: "testdb".into(),
             table_name: "cpu".into(),
             chunk_time: 0,
+            field_names: vec!["cpu".into(), "count".into(), "online".into()],
+            tag_keys: vec!["host".into(), "region".into()],
             rows: vec![
                 Row {
                     time: 100,
@@ -404,30 +426,31 @@ mod tests {
 
         let table = buffer.get_table("testdb", "cpu").unwrap();
 
-        // Schema should have at least 1 field def. All field names are ""
-        // (field names come from LP parsing context), so ensure_field deduplicates
-        // by name. With empty names, the first field (F64) is added and the
-        // subsequent calls for I64 and Bool find the same entry and return its index.
-        assert_eq!(table.schema.field_defs.len(), 1);
+        // Schema should have field defs with real names (C2 fix)
+        assert_eq!(table.schema.field_defs.len(), 3);
+        assert_eq!(table.schema.field_defs[0].name, "cpu");
         assert_eq!(table.schema.field_defs[0].value_type, FieldType::F64);
+        assert_eq!(table.schema.field_defs[1].name, "count");
+        assert_eq!(table.schema.field_defs[1].value_type, FieldType::I64);
+        assert_eq!(table.schema.field_defs[2].name, "online");
+        assert_eq!(table.schema.field_defs[2].value_type, FieldType::Bool);
+
+        // Tag keys should also be registered (I1 fix)
+        assert_eq!(table.schema.tag_keys.len(), 2);
+        assert_eq!(table.schema.tag_keys, vec!["host", "region"]);
     }
 
     #[test]
     fn test_apply_write_batch_builds_tag_index() {
         let mut buffer = Buffer::new();
 
-        // First, we need tag keys in the schema. The apply_write_batch
-        // function itself doesn't add tag keys — the caller is responsible.
-        // We'll manually set up tag keys first.
-        {
-            let table = buffer.get_or_create_table("testdb", "cpu");
-            table.schema.ensure_tag_key("host");
-        }
-
+        // Tag keys are passed through the batch now (I1 fix)
         let batch = WriteBatch {
             db_name: "testdb".into(),
             table_name: "cpu".into(),
             chunk_time: 0,
+            field_names: vec![],
+            tag_keys: vec!["host".into()],
             rows: vec![
                 Row {
                     time: 100,
@@ -460,15 +483,13 @@ mod tests {
     #[test]
     fn test_apply_write_batch_multiple_batches_same_table() {
         let mut buffer = Buffer::new();
-        {
-            let table = buffer.get_or_create_table("testdb", "cpu");
-            table.schema.ensure_tag_key("host");
-        }
 
         let batch1 = WriteBatch {
             db_name: "testdb".into(),
             table_name: "cpu".into(),
             chunk_time: 0,
+            field_names: vec!["usage".into()],
+            tag_keys: vec!["host".into()],
             rows: vec![Row {
                 time: 100,
                 tag_values: vec!["srv01".into()],
@@ -480,6 +501,8 @@ mod tests {
             db_name: "testdb".into(),
             table_name: "cpu".into(),
             chunk_time: 10,
+            field_names: vec!["usage".into()],
+            tag_keys: vec!["host".into()],
             rows: vec![Row {
                 time: 200,
                 tag_values: vec!["srv02".into()],
@@ -497,6 +520,56 @@ mod tests {
         assert_eq!(table.chunks[0].row_count(), 1);
         assert_eq!(table.chunks[1].row_count(), 1);
     }
+
+    #[test]
+    fn test_apply_write_batch_tag_index_chunk_absolute_indices() {
+        // C3 fix: verify tag index uses chunk-absolute indices when chunk already has rows
+        let mut buffer = Buffer::new();
+
+        // Batch 1: insert 3 rows into chunk_time=0
+        let batch1 = WriteBatch {
+            db_name: "testdb".into(),
+            table_name: "cpu".into(),
+            chunk_time: 0,
+            field_names: vec!["usage".into()],
+            tag_keys: vec!["host".into()],
+            rows: vec![
+                Row { time: 100, tag_values: vec!["srv01".into()], field_values: vec![Some(FieldValue::F64(0.5))] },
+                Row { time: 200, tag_values: vec!["srv02".into()], field_values: vec![Some(FieldValue::F64(0.6))] },
+                Row { time: 300, tag_values: vec!["srv01".into()], field_values: vec![Some(FieldValue::F64(0.7))] },
+            ],
+        };
+        apply_write_batch(&mut buffer, &batch1, 1);
+
+        // Batch 2: insert 2 more rows into the SAME chunk_time=0
+        let batch2 = WriteBatch {
+            db_name: "testdb".into(),
+            table_name: "cpu".into(),
+            chunk_time: 0,
+            field_names: vec!["usage".into()],
+            tag_keys: vec!["host".into()],
+            rows: vec![
+                Row { time: 400, tag_values: vec!["srv03".into()], field_values: vec![Some(FieldValue::F64(0.8))] },
+                Row { time: 500, tag_values: vec!["srv01".into()], field_values: vec![Some(FieldValue::F64(0.9))] },
+            ],
+        };
+        apply_write_batch(&mut buffer, &batch2, 2);
+
+        let table = buffer.get_table("testdb", "cpu").unwrap();
+        assert_eq!(table.chunks.len(), 1);
+        let chunk = &table.chunks[0];
+        assert_eq!(chunk.row_count(), 5);
+
+        // Tag index must point to chunk-absolute indices
+        let host_index = chunk.tag_index.get("host").expect("tag_index should have 'host'");
+
+        // srv01 should be at indices 0, 2, 4 (absolute within chunk, not batch-relative)
+        assert_eq!(host_index["srv01"], vec![0, 2, 4]);
+        // srv02 at index 1
+        assert_eq!(host_index["srv02"], vec![1]);
+        // srv03 at index 3 (absolute, after the first 3 rows from batch1)
+        assert_eq!(host_index["srv03"], vec![3]);
+    }
 }
 
 /// Apply a `WriteBatch` to the in-memory buffer.
@@ -508,21 +581,28 @@ pub fn apply_write_batch(buffer: &mut Buffer, batch: &WriteBatch, wal_seq: u64) 
 
     let chunk_time = batch.chunk_time;
 
-    // Ensure fields exist in the table schema
-    for row in &batch.rows {
-        for fv in &row.field_values {
-            if let Some(val) = fv {
-                let _ = table.schema.ensure_field(
-                    "", // field name comes from the LP parsing context
-                    val.field_type(),
-                );
-            }
+    // Register tag keys in the table schema (I1 fix)
+    for key in &batch.tag_keys {
+        table.schema.ensure_tag_key(key);
+    }
+
+    // Ensure fields exist in the table schema with actual field names (C2 fix)
+    for field_name in &batch.field_names {
+        // Determine field type from the first row that has this field
+        let field_idx = batch.field_names.iter().position(|n| n == field_name).unwrap_or(0);
+        let field_type = batch.rows.iter()
+            .find_map(|row| row.field_values.get(field_idx).and_then(|v| v.as_ref().map(|fv| fv.field_type())));
+        if let Some(ft) = field_type {
+            let _ = table.schema.ensure_field(field_name, ft);
         }
     }
 
     // Clone tag_keys to avoid concurrent mutable borrow of table and chunk
     let tag_keys = table.schema.tag_keys.clone();
     let chunk = table.get_or_create_chunk(chunk_time);
+
+    // Compute base index for tag index entries (C3 fix)
+    let base_idx = chunk.rows.len();
 
     for (row_idx, row) in batch.rows.iter().enumerate() {
         chunk.insert(row.clone(), wal_seq);
@@ -536,7 +616,7 @@ pub fn apply_write_batch(buffer: &mut Buffer, batch: &WriteBatch, wal_seq: u64) 
                     .or_default()
                     .entry(value.clone())
                     .or_default()
-                    .push(row_idx);
+                    .push(base_idx + row_idx);
             }
         }
     }

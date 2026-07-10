@@ -112,7 +112,9 @@ pub fn flush_chunks_to_parquet(table: &Table, chunks: &[&Chunk]) -> Result<Vec<u
                                         def_levels.push(1);
                                     }
                                     Some(Some(FieldValue::U64(v))) => {
-                                        vals.push(*v as i64);
+                                        let val = i64::try_from(*v)
+                                            .map_err(|_| format!("u64 value {} exceeds i64 range", v))?;
+                                        vals.push(val);
                                         def_levels.push(1);
                                     }
                                     _ => {

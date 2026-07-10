@@ -137,10 +137,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 Response::builder()
                                     .status(200)
                                     .body("ok".into())
-                                    .unwrap()
+                                    .expect("valid health response")
                             )
                         }
-                        _ => Ok(Response::builder().status(404).body("not found".into()).unwrap()),
+                        _ => Ok(Response::builder()
+                            .status(404)
+                            .body("not found".into())
+                            .expect("valid 404 response")),
                     }
                 }
             });
@@ -168,13 +171,17 @@ async fn retry_staging_files(
             for entry in entries.flatten() {
                 let db_dir = entry.path();
                 if !db_dir.is_dir() { continue; }
-                let db = db_dir.file_name().unwrap().to_string_lossy().to_string();
+                let db = db_dir.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
 
                 if let Ok(table_dirs) = std::fs::read_dir(&db_dir) {
                     for t_entry in table_dirs.flatten() {
                         let table_dir = t_entry.path();
                         if !table_dir.is_dir() { continue; }
-                        let table = table_dir.file_name().unwrap().to_string_lossy().to_string();
+                        let table = table_dir.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
 
                         if let Ok(files) = std::fs::read_dir(&table_dir) {
                             for f_entry in files.flatten() {
@@ -221,5 +228,5 @@ async fn retry_staging_files(
 }
 
 fn urlencoding(s: &str) -> String {
-    s.replace(' ', "%20")
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }

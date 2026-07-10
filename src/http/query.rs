@@ -30,7 +30,7 @@ impl QueryHandler {
                 return Ok(Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .body(r#"{"error":"missing table param"}"#.into())
-                    .unwrap());
+                    .expect("valid response"));
             }
         };
 
@@ -69,6 +69,6 @@ impl QueryHandler {
             .status(StatusCode::OK)
             .header("Content-Type", "application/json")
             .body(json)
-            .unwrap())
+            .expect("valid response"))
     }
 }

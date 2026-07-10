@@ -50,6 +50,8 @@ mod tests {
                     db_name: "testdb".into(),
                     table_name: "cpu".into(),
                     chunk_time: 1000,
+                    field_names: vec!["usage".into()],
+                    tag_keys: vec!["host".into()],
                     rows: vec![
                         Row {
                             time: 1000,
