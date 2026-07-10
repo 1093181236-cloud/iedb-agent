@@ -1,0 +1,20 @@
+[server]
+port = 8080
+
+[data]
+dir = "/var/lib/iedb-agent"
+
+[wal]
+flush_interval_secs = 1
+max_write_buffer_ops = 100000
+
+[flush]
+snapshot_interval = "10m"
+backend = "http"
+memory_limit = "512MB"
+
+[iotedgedb]
+url = "http://localhost:8000"
+
+[agent]
+id = "agent-01"
