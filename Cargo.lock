@@ -964,6 +964,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "crc32fast",
  "http 1.4.2",
  "hyper",
  "hyper-util",

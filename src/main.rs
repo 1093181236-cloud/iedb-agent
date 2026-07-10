@@ -1,5 +1,6 @@
 mod buffer;
 mod config;
+mod wal;
 
 use config::Config;
 use tracing_subscriber;

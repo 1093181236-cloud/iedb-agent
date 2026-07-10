@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// A field value in a time-series row.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FieldValue {
     I64(i64),
     F64(f64),
@@ -11,7 +12,7 @@ pub enum FieldValue {
 }
 
 /// The type of a field column.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FieldType {
     I64,
     F64,
@@ -33,14 +34,14 @@ impl FieldValue {
 }
 
 /// A field definition in the table schema.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldDef {
     pub name: String,
     pub value_type: FieldType,
 }
 
 /// Table-level schema shared across all rows and chunks.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableSchema {
     pub tag_keys: Vec<String>,
     pub field_defs: Vec<FieldDef>,
@@ -77,7 +78,7 @@ impl TableSchema {
 }
 
 /// A row stores only values; keys come from TableSchema.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Row {
     pub time: i64,
     pub tag_values: Vec<String>,
