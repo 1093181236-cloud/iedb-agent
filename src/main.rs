@@ -1,5 +1,6 @@
 mod buffer;
 mod config;
+mod flush;
 mod http;
 mod wal;
 
