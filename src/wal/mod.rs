@@ -1,4 +1,5 @@
 pub mod serialize;
+pub mod wal_core;
 
 use crate::buffer::chunk::Row;
 use serde::{Deserialize, Serialize};
