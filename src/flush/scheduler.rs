@@ -224,3 +224,111 @@ impl SnapshotScheduler {
         Ok(flushed_count)
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    /// Compute the end_time_marker the same way do_snapshot does.
+    fn compute_end_time_marker(now_ns: i64, snapshot_interval_secs: i64) -> i64 {
+        let interval_ns = snapshot_interval_secs * 1_000_000_000;
+        ((now_ns - interval_ns) / interval_ns) * interval_ns
+    }
+
+    #[test]
+    fn test_end_time_marker_10m_interval() {
+        // snapshot_interval = 10m = 600s
+        // Formula: floor((now - interval) / interval) * interval
+
+        // now = 1200s: (1200-600)/600 * 600 = 1 * 600 = 600s
+        let marker = compute_end_time_marker(1_200_000_000_000, 600);
+        assert_eq!(marker, 600_000_000_000);
+
+        // now = 1800s: (1800-600)/600 * 600 = 2 * 600 = 1200s
+        let marker = compute_end_time_marker(1_800_000_000_000, 600);
+        assert_eq!(marker, 1_200_000_000_000);
+
+        // now = 590s: (590-600)/600 * 600 = 0 * 600 = 0 (not yet one full interval old)
+        let marker = compute_end_time_marker(590_000_000_000, 600);
+        assert_eq!(marker, 0);
+    }
+
+    #[test]
+    fn test_end_time_marker_60s_interval() {
+        // snapshot_interval = 60s
+
+        // now = 120s: (120-60)/60 * 60 = 1 * 60 = 60s
+        let marker = compute_end_time_marker(120_000_000_000, 60);
+        assert_eq!(marker, 60_000_000_000);
+
+        // now = 200s: (200-60)/60 * 60 = 2 * 60 = 120s
+        let marker = compute_end_time_marker(200_000_000_000, 60);
+        assert_eq!(marker, 120_000_000_000);
+    }
+
+    #[test]
+    fn test_chunk_collection_only_selects_before_marker() {
+        use crate::buffer::Buffer;
+        use crate::buffer::chunk::{Chunk, Row};
+
+        let mut buffer = Buffer::new();
+        let table = buffer.get_or_create_table("testdb", "cpu");
+
+        // Create chunks at 100s, 500s, 900s (in ns)
+        let mut c1 = Chunk::new(100_000_000_000);
+        c1.rows.push(Row { time: 100, tag_values: vec![], field_values: vec![] });
+        table.chunks.push(c1);
+
+        let mut c2 = Chunk::new(500_000_000_000);
+        c2.rows.push(Row { time: 500, tag_values: vec![], field_values: vec![] });
+        table.chunks.push(c2);
+
+        let mut c3 = Chunk::new(900_000_000_000);
+        c3.rows.push(Row { time: 900, tag_values: vec![], field_values: vec![] });
+        table.chunks.push(c3);
+
+        // end_time_marker = 600s = 600_000_000_000 ns
+        let end_time_marker: i64 = 600_000_000_000;
+
+        let selected: Vec<usize> = table
+            .chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.chunk_time < end_time_marker)
+            .map(|(i, _)| i)
+            .collect();
+
+        // Only chunks at 100s and 500s should be selected (indices 0, 1)
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected, vec![0, 1]);
+    }
+
+    #[test]
+    fn test_chunk_collection_none_if_all_after_marker() {
+        use crate::buffer::Buffer;
+        use crate::buffer::chunk::{Chunk, Row};
+
+        let mut buffer = Buffer::new();
+        let table = buffer.get_or_create_table("testdb", "cpu");
+
+        let mut c1 = Chunk::new(800_000_000_000);
+        c1.rows.push(Row { time: 800, tag_values: vec![], field_values: vec![] });
+        table.chunks.push(c1);
+
+        let mut c2 = Chunk::new(900_000_000_000);
+        c2.rows.push(Row { time: 900, tag_values: vec![], field_values: vec![] });
+        table.chunks.push(c2);
+
+        // end_time_marker = 600s
+        let end_time_marker: i64 = 600_000_000_000;
+
+        let selected: Vec<usize> = table
+            .chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.chunk_time < end_time_marker)
+            .map(|(i, _)| i)
+            .collect();
+
+        assert!(selected.is_empty());
+    }
+}

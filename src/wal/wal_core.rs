@@ -227,6 +227,100 @@ impl std::fmt::Display for WalError {
 
 impl std::error::Error for WalError {}
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::WalConfig;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static TEST_SEQ: AtomicU32 = AtomicU32::new(0);
+
+    fn test_data_dir() -> PathBuf {
+        let seq = TEST_SEQ.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!("iedb_wal_test_{}_{}", std::process::id(), seq))
+    }
+
+    #[tokio::test]
+    async fn test_buffer_op_count_and_limit() {
+        let tmp = test_data_dir();
+        let config = WalConfig {
+            flush_interval_secs: 1,
+            max_write_buffer_ops: 5,
+        };
+        let mut wm = WalManager::new(&tmp, &config).await.unwrap();
+
+        // Buffer 5 ops -- all should succeed
+        for i in 0..5 {
+            assert!(
+                wm.buffer_op(WalOp::Noop).is_ok(),
+                "op {} should succeed",
+                i
+            );
+        }
+        assert_eq!(wm.op_count, 5);
+        assert_eq!(wm.pending_ops.len(), 5);
+
+        // 6th op should return BufferFull
+        let result = wm.buffer_op(WalOp::Noop);
+        assert!(result.is_err());
+        match result {
+            Err(WalError::BufferFull(n)) => assert_eq!(n, 5),
+            _ => panic!("expected BufferFull, got {:?}", result),
+        }
+        // op_count and pending_ops must not change on BufferFull
+        assert_eq!(wm.op_count, 5);
+        assert_eq!(wm.pending_ops.len(), 5);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_flush_resets_op_count_and_can_buffer_again() {
+        let tmp = test_data_dir();
+        let config = WalConfig {
+            flush_interval_secs: 1,
+            max_write_buffer_ops: 5,
+        };
+        let mut wm = WalManager::new(&tmp, &config).await.unwrap();
+
+        // Buffer to limit
+        for _ in 0..5 {
+            wm.buffer_op(WalOp::Noop).unwrap();
+        }
+        assert_eq!(wm.op_count, 5);
+
+        // Flush returns the ops and resets state
+        let ops = wm.flush().await.unwrap();
+        assert_eq!(ops.len(), 5);
+        // After flush, op_count and pending_ops are reset
+        assert_eq!(wm.op_count, 0);
+        assert!(wm.pending_ops.is_empty());
+
+        // Can buffer again after flush
+        assert!(wm.buffer_op(WalOp::Noop).is_ok());
+        assert_eq!(wm.op_count, 1);
+        assert_eq!(wm.pending_ops.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_flush_empty_buffer_returns_empty_vec() {
+        let tmp = test_data_dir();
+        let config = WalConfig {
+            flush_interval_secs: 1,
+            max_write_buffer_ops: 100,
+        };
+        let mut wm = WalManager::new(&tmp, &config).await.unwrap();
+
+        let ops = wm.flush().await.unwrap();
+        assert!(ops.is_empty());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
 /// Apply a `WriteBatch` to the in-memory buffer.
 ///
 /// Ensures the target table and chunk exist, evolves the schema as needed,
