@@ -1,5 +1,5 @@
 use crate::buffer::Buffer;
-use hyper::{body::Incoming, Request, Response, StatusCode};
+use hyper::{Request, Response, StatusCode};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use url::form_urlencoded;
@@ -9,7 +9,10 @@ pub struct QueryHandler {
 }
 
 impl QueryHandler {
-    pub async fn handle(&self, req: Request<Incoming>) -> Result<Response<String>, hyper::Error> {
+    pub async fn handle<B>(&self, req: Request<B>) -> Result<Response<String>, hyper::Error>
+    where
+        B: Send + Unpin + 'static,
+    {
         let uri = req.uri();
         let query_str = uri.query().unwrap_or("");
         let params: Vec<(String, String)> = form_urlencoded::parse(query_str.as_bytes())

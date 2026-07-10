@@ -1,10 +1,4 @@
-mod agent;
-mod buffer;
-mod config;
-mod flush;
-mod http;
-mod wal;
-
+use iedb_agent::{agent, buffer, config, flush, http, wal};
 use config::Config;
 use flush::scheduler::SnapshotScheduler;
 use hyper::body::Incoming;
@@ -78,9 +72,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match wal_flush.lock().await.flush().await {
                 Ok(ops) => {
                     for op in ops {
-                        if let crate::wal::WalOp::Write(batch) = op {
+                        if let wal::WalOp::Write(batch) = op {
                             let mut buf = wal_flush_buffer.lock().await;
-                            crate::wal::wal_core::apply_write_batch(&mut buf, &batch, 0);
+                            wal::wal_core::apply_write_batch(&mut buf, &batch, 0);
                         }
                     }
                 }

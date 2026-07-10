@@ -3,8 +3,9 @@ use crate::buffer::chunk::{Row, FieldValue as BFieldValue};
 use crate::config::Config;
 use crate::wal::wal_core::WalManager;
 use crate::wal::{WriteBatch, WalOp};
-use hyper::{body::Incoming, Request, Response, StatusCode, Method};
+use hyper::{Request, Response, StatusCode, Method};
 use http_body_util::BodyExt;
+use bytes;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use influxdb_line_protocol::parse_lines;
@@ -16,7 +17,11 @@ pub struct WriteHandler {
 }
 
 impl WriteHandler {
-    pub async fn handle(&self, req: Request<Incoming>) -> Result<Response<String>, hyper::Error> {
+    pub async fn handle<B>(&self, req: Request<B>) -> Result<Response<String>, hyper::Error>
+    where
+        B: hyper::body::Body<Data = bytes::Bytes> + Send + Unpin,
+        B::Error: Into<hyper::Error>,
+    {
         if req.method() != Method::POST {
             return Ok(Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
@@ -40,7 +45,9 @@ impl WriteHandler {
             .unwrap_or_else(|| "default".into());
 
         // Read body
-        let body_bytes = req.into_body().collect().await?.to_bytes();
+        let body_bytes = req.into_body().collect().await
+            .map_err(Into::into)?
+            .to_bytes();
         let lp_str = match std::str::from_utf8(&body_bytes) {
             Ok(s) => s,
             Err(_) => {
