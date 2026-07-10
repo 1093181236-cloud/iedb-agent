@@ -230,6 +230,7 @@ impl std::error::Error for WalError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::chunk::{FieldType, FieldValue, Row};
     use crate::config::WalConfig;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -318,6 +319,183 @@ mod tests {
         assert!(ops.is_empty());
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── Test 4: apply_write_batch ──────────────────────────────────────
+
+    #[test]
+    fn test_apply_write_batch_creates_table_in_buffer() {
+        let mut buffer = Buffer::new();
+        let batch = WriteBatch {
+            db_name: "testdb".into(),
+            table_name: "cpu".into(),
+            chunk_time: 0,
+            rows: vec![Row {
+                time: 100,
+                tag_values: vec!["srv01".into()],
+                field_values: vec![Some(FieldValue::F64(0.5))],
+            }],
+        };
+
+        apply_write_batch(&mut buffer, &batch, 1);
+
+        // Table should exist
+        assert!(buffer.get_table("testdb", "cpu").is_some());
+        let table = buffer.get_table("testdb", "cpu").unwrap();
+        assert_eq!(table.name, "cpu");
+    }
+
+    #[test]
+    fn test_apply_write_batch_inserts_rows_into_correct_chunk() {
+        let mut buffer = Buffer::new();
+        let batch = WriteBatch {
+            db_name: "testdb".into(),
+            table_name: "cpu".into(),
+            chunk_time: 42,
+            rows: vec![
+                Row {
+                    time: 100,
+                    tag_values: vec!["srv01".into()],
+                    field_values: vec![Some(FieldValue::F64(0.5))],
+                },
+                Row {
+                    time: 200,
+                    tag_values: vec!["srv02".into()],
+                    field_values: vec![Some(FieldValue::F64(0.8))],
+                },
+            ],
+        };
+
+        apply_write_batch(&mut buffer, &batch, 5);
+
+        let table = buffer.get_table("testdb", "cpu").unwrap();
+        assert_eq!(table.chunks.len(), 1);
+        assert_eq!(table.chunks[0].chunk_time, 42);
+        assert_eq!(table.chunks[0].row_count(), 2);
+        assert_eq!(table.chunks[0].rows[0].time, 100);
+        assert_eq!(table.chunks[0].rows[1].time, 200);
+
+        // Check WAL seq bounds
+        assert_eq!(table.chunks[0].min_wal_seq, 5);
+        assert_eq!(table.chunks[0].max_wal_seq, 5);
+    }
+
+    #[test]
+    fn test_apply_write_batch_evolves_schema_from_row_fields() {
+        let mut buffer = Buffer::new();
+        let batch = WriteBatch {
+            db_name: "testdb".into(),
+            table_name: "cpu".into(),
+            chunk_time: 0,
+            rows: vec![
+                Row {
+                    time: 100,
+                    tag_values: vec!["srv01".into(), "us-east".into()],
+                    field_values: vec![
+                        Some(FieldValue::F64(0.5)),
+                        Some(FieldValue::I64(100)),
+                        Some(FieldValue::Bool(true)),
+                    ],
+                },
+            ],
+        };
+
+        apply_write_batch(&mut buffer, &batch, 1);
+
+        let table = buffer.get_table("testdb", "cpu").unwrap();
+
+        // Schema should have at least 1 field def. All field names are ""
+        // (field names come from LP parsing context), so ensure_field deduplicates
+        // by name. With empty names, the first field (F64) is added and the
+        // subsequent calls for I64 and Bool find the same entry and return its index.
+        assert_eq!(table.schema.field_defs.len(), 1);
+        assert_eq!(table.schema.field_defs[0].value_type, FieldType::F64);
+    }
+
+    #[test]
+    fn test_apply_write_batch_builds_tag_index() {
+        let mut buffer = Buffer::new();
+
+        // First, we need tag keys in the schema. The apply_write_batch
+        // function itself doesn't add tag keys — the caller is responsible.
+        // We'll manually set up tag keys first.
+        {
+            let table = buffer.get_or_create_table("testdb", "cpu");
+            table.schema.ensure_tag_key("host");
+        }
+
+        let batch = WriteBatch {
+            db_name: "testdb".into(),
+            table_name: "cpu".into(),
+            chunk_time: 0,
+            rows: vec![
+                Row {
+                    time: 100,
+                    tag_values: vec!["srv01".into()],
+                    field_values: vec![],
+                },
+                Row {
+                    time: 200,
+                    tag_values: vec!["srv02".into()],
+                    field_values: vec![],
+                },
+                Row {
+                    time: 300,
+                    tag_values: vec!["srv01".into()],
+                    field_values: vec![],
+                },
+            ],
+        };
+
+        apply_write_batch(&mut buffer, &batch, 1);
+
+        let table = buffer.get_table("testdb", "cpu").unwrap();
+        let chunk = &table.chunks[0];
+
+        let host_index = chunk.tag_index.get("host").expect("tag_index should have 'host'");
+        assert_eq!(host_index["srv01"], vec![0, 2]);
+        assert_eq!(host_index["srv02"], vec![1]);
+    }
+
+    #[test]
+    fn test_apply_write_batch_multiple_batches_same_table() {
+        let mut buffer = Buffer::new();
+        {
+            let table = buffer.get_or_create_table("testdb", "cpu");
+            table.schema.ensure_tag_key("host");
+        }
+
+        let batch1 = WriteBatch {
+            db_name: "testdb".into(),
+            table_name: "cpu".into(),
+            chunk_time: 0,
+            rows: vec![Row {
+                time: 100,
+                tag_values: vec!["srv01".into()],
+                field_values: vec![Some(FieldValue::F64(0.5))],
+            }],
+        };
+
+        let batch2 = WriteBatch {
+            db_name: "testdb".into(),
+            table_name: "cpu".into(),
+            chunk_time: 10,
+            rows: vec![Row {
+                time: 200,
+                tag_values: vec!["srv02".into()],
+                field_values: vec![Some(FieldValue::F64(0.8))],
+            }],
+        };
+
+        apply_write_batch(&mut buffer, &batch1, 1);
+        apply_write_batch(&mut buffer, &batch2, 2);
+
+        let table = buffer.get_table("testdb", "cpu").unwrap();
+        assert_eq!(table.chunks.len(), 2);
+        assert_eq!(table.chunks[0].chunk_time, 0);
+        assert_eq!(table.chunks[1].chunk_time, 10);
+        assert_eq!(table.chunks[0].row_count(), 1);
+        assert_eq!(table.chunks[1].row_count(), 1);
     }
 }
 

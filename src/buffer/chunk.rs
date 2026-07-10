@@ -316,4 +316,286 @@ mod tests {
         let results = query_table(&table, Some(1000), Some(2000), None, None);
         assert!(results.is_empty());
     }
+
+    // ── Test 2: Schema evolution + Chunk basics ──────────────────────────
+
+    #[test]
+    fn test_schema_ensure_field_new_field_added() {
+        let mut schema = TableSchema::new();
+        let idx = schema.ensure_field("cpu", FieldType::F64);
+        assert_eq!(idx, 0);
+        assert_eq!(schema.field_defs.len(), 1);
+        assert_eq!(schema.field_defs[0].name, "cpu");
+        assert_eq!(schema.field_defs[0].value_type, FieldType::F64);
+    }
+
+    #[test]
+    fn test_schema_ensure_field_existing_returns_same_index() {
+        let mut schema = TableSchema::new();
+        let idx1 = schema.ensure_field("cpu", FieldType::F64);
+        let idx2 = schema.ensure_field("mem", FieldType::F64);
+        let idx3 = schema.ensure_field("cpu", FieldType::I64); // different type, same name
+        assert_eq!(idx1, 0);
+        assert_eq!(idx2, 1);
+        assert_eq!(idx3, 0, "existing field should return original index");
+        assert_eq!(schema.field_defs.len(), 2, "should not add duplicate field");
+        // Type should still be the original (F64), not I64
+        assert_eq!(schema.field_defs[0].value_type, FieldType::F64);
+    }
+
+    #[test]
+    fn test_schema_ensure_tag_key_new_key_added() {
+        let mut schema = TableSchema::new();
+        let idx = schema.ensure_tag_key("host");
+        assert_eq!(idx, 0);
+        assert_eq!(schema.tag_keys.len(), 1);
+        assert_eq!(schema.tag_keys[0], "host");
+    }
+
+    #[test]
+    fn test_schema_ensure_tag_key_existing_returns_same_index() {
+        let mut schema = TableSchema::new();
+        let idx1 = schema.ensure_tag_key("host");
+        let idx2 = schema.ensure_tag_key("region");
+        let idx3 = schema.ensure_tag_key("host");
+        assert_eq!(idx1, 0);
+        assert_eq!(idx2, 1);
+        assert_eq!(idx3, 0);
+        assert_eq!(schema.tag_keys.len(), 2);
+        assert_eq!(schema.tag_keys, vec!["host", "region"]);
+    }
+
+    #[test]
+    fn test_chunk_new_initializes_correctly() {
+        let chunk = Chunk::new(42);
+        assert!(chunk.rows.is_empty());
+        assert_eq!(chunk.chunk_time, 42);
+        assert_eq!(chunk.time_min, i64::MAX);
+        assert_eq!(chunk.time_max, i64::MIN);
+        assert_eq!(chunk.min_wal_seq, u64::MAX);
+        assert_eq!(chunk.max_wal_seq, 0);
+        assert_eq!(chunk.row_count(), 0);
+        assert!(chunk.is_empty());
+    }
+
+    #[test]
+    fn test_chunk_insert_updates_time_bounds_and_row_count() {
+        let mut chunk = Chunk::new(0);
+        let row = Row {
+            time: 100,
+            tag_values: vec![],
+            field_values: vec![],
+        };
+        chunk.insert(row.clone(), 1);
+
+        assert_eq!(chunk.time_min, 100);
+        assert_eq!(chunk.time_max, 100);
+        assert_eq!(chunk.row_count(), 1);
+
+        // Insert a later time
+        chunk.insert(
+            Row {
+                time: 200,
+                tag_values: vec![],
+                field_values: vec![],
+            },
+            2,
+        );
+        assert_eq!(chunk.time_min, 100);
+        assert_eq!(chunk.time_max, 200);
+        assert_eq!(chunk.row_count(), 2);
+
+        // Insert an earlier time
+        chunk.insert(
+            Row {
+                time: 50,
+                tag_values: vec![],
+                field_values: vec![],
+            },
+            3,
+        );
+        assert_eq!(chunk.time_min, 50);
+        assert_eq!(chunk.time_max, 200);
+        assert_eq!(chunk.row_count(), 3);
+    }
+
+    #[test]
+    fn test_chunk_insert_updates_wal_seq_bounds() {
+        let mut chunk = Chunk::new(0);
+        let row = Row {
+            time: 100,
+            tag_values: vec![],
+            field_values: vec![],
+        };
+
+        chunk.insert(row.clone(), 5);
+        assert_eq!(chunk.min_wal_seq, 5);
+        assert_eq!(chunk.max_wal_seq, 5);
+
+        chunk.insert(row.clone(), 3);
+        assert_eq!(chunk.min_wal_seq, 3);
+        assert_eq!(chunk.max_wal_seq, 5);
+
+        chunk.insert(row.clone(), 10);
+        assert_eq!(chunk.min_wal_seq, 3);
+        assert_eq!(chunk.max_wal_seq, 10);
+    }
+
+    #[test]
+    fn test_chunk_estimated_size_grows_with_rows() {
+        let mut chunk = Chunk::new(0);
+        let row = Row {
+            time: 100,
+            tag_values: vec![],
+            field_values: vec![],
+        };
+
+        // avg_row_bytes defaults to 0, so estimated_size uses max(0, 64) = 64 per row
+        assert_eq!(chunk.estimated_size(), 0);
+
+        chunk.insert(row.clone(), 1);
+        assert_eq!(chunk.estimated_size(), 64);
+
+        chunk.insert(row, 2);
+        assert_eq!(chunk.estimated_size(), 128);
+
+        // Set a higher avg_row_bytes
+        chunk.avg_row_bytes = 200;
+        assert_eq!(chunk.estimated_size(), 400);
+    }
+
+    #[test]
+    fn test_build_tag_index_with_multiple_tags() {
+        let mut schema = TableSchema::new();
+        schema.ensure_tag_key("host");
+        schema.ensure_tag_key("region");
+
+        let mut table = Table {
+            name: "metrics".to_string(),
+            schema,
+            chunks: Vec::new(),
+        };
+
+        let mut chunk = Chunk::new(0);
+
+        // Insert rows and build tag index
+        chunk.rows.push(Row {
+            time: 100,
+            tag_values: vec!["srv01".to_string(), "us-east".to_string()],
+            field_values: vec![],
+        });
+        table.build_tag_index(&mut chunk, 0, &["srv01".to_string(), "us-east".to_string()]);
+
+        chunk.rows.push(Row {
+            time: 200,
+            tag_values: vec!["srv02".to_string(), "us-west".to_string()],
+            field_values: vec![],
+        });
+        table.build_tag_index(&mut chunk, 1, &["srv02".to_string(), "us-west".to_string()]);
+
+        chunk.rows.push(Row {
+            time: 300,
+            tag_values: vec!["srv01".to_string(), "us-west".to_string()],
+            field_values: vec![],
+        });
+        table.build_tag_index(&mut chunk, 2, &["srv01".to_string(), "us-west".to_string()]);
+
+        // Check host index
+        let host_idx = &chunk.tag_index["host"];
+        assert_eq!(host_idx["srv01"], vec![0, 2]);
+        assert_eq!(host_idx["srv02"], vec![1]);
+
+        // Check region index
+        let region_idx = &chunk.tag_index["region"];
+        assert_eq!(region_idx["us-east"], vec![0]);
+        assert_eq!(region_idx["us-west"], vec![1, 2]);
+    }
+
+    // ── Test 5: Multi-chunk scenarios ──────────────────────────────────
+
+    #[test]
+    fn test_table_get_or_create_chunk_returns_existing_for_same_time() {
+        let mut table = Table::new("test".to_string());
+        {
+            let _ = table.get_or_create_chunk(100);
+        } // borrow dropped
+
+        // Calling get_or_create_chunk again with same time should return existing
+        {
+            let _c2 = table.get_or_create_chunk(100);
+        }
+
+        assert_eq!(table.chunks.len(), 1, "should not create duplicate chunk");
+        assert_eq!(table.chunks[0].chunk_time, 100);
+    }
+
+    #[test]
+    fn test_table_get_or_create_chunk_creates_new_for_different_time() {
+        let mut table = Table::new("test".to_string());
+        let _c1 = table.get_or_create_chunk(100);
+        let _c2 = table.get_or_create_chunk(200);
+        let _c3 = table.get_or_create_chunk(50);
+
+        assert_eq!(table.chunks.len(), 3);
+        // Chunks must be sorted by chunk_time (binary_search_by requires sorted vec)
+        assert_eq!(table.chunks[0].chunk_time, 50);
+        assert_eq!(table.chunks[1].chunk_time, 100);
+        assert_eq!(table.chunks[2].chunk_time, 200);
+    }
+
+    #[test]
+    fn test_table_chunks_stay_sorted_by_chunk_time() {
+        let mut table = Table::new("test".to_string());
+
+        // Insert in non-sorted order
+        let times = vec![300, 100, 500, 200, 400];
+        for t in &times {
+            table.get_or_create_chunk(*t);
+        }
+
+        // Verify sorted order is maintained
+        assert_eq!(table.chunks.len(), 5);
+        for i in 1..table.chunks.len() {
+            assert!(
+                table.chunks[i - 1].chunk_time < table.chunks[i].chunk_time,
+                "chunks not sorted: chunk[{}].chunk_time={} >= chunk[{}].chunk_time={}",
+                i - 1, table.chunks[i - 1].chunk_time,
+                i, table.chunks[i].chunk_time,
+            );
+        }
+        assert_eq!(table.chunks[0].chunk_time, 100);
+        assert_eq!(table.chunks[4].chunk_time, 500);
+    }
+
+    #[test]
+    fn test_chunk_removal_from_vec_simulating_flush_cleanup() {
+        let mut table = Table::new("test".to_string());
+
+        // Create 3 chunks with data
+        for ct in [0, 10, 20] {
+            let chunk = table.get_or_create_chunk(ct);
+            let row = Row {
+                time: ct * 10,
+                tag_values: vec![],
+                field_values: vec![],
+            };
+            chunk.insert(row, ct as u64);
+        }
+        assert_eq!(table.chunks.len(), 3);
+
+        // Simulate flushing: remove the first chunk (chunk_time=0)
+        table.chunks.remove(0);
+        assert_eq!(table.chunks.len(), 2);
+        assert_eq!(table.chunks[0].chunk_time, 10);
+        assert_eq!(table.chunks[1].chunk_time, 20);
+
+        // Remove remaining chunks one by one
+        table.chunks.remove(1);
+        assert_eq!(table.chunks.len(), 1);
+        assert_eq!(table.chunks[0].chunk_time, 10);
+
+        table.chunks.clear();
+        assert_eq!(table.chunks.len(), 0);
+        assert_eq!(table.estimated_size(), 0);
+    }
 }

@@ -99,3 +99,81 @@ pub fn s3_key(agent_id: &str, db: &str, table: &str, ts_nanos: i64) -> String {
         db, table, year, month, day, hour, agent_id, ts_str, nanos
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_s3_key_generates_correct_path_format() {
+        // 2024-01-01 00:00:00.000000000 UTC = 1704067200 seconds since epoch
+        // So in nanos: 1704067200 * 1_000_000_000 = 1_704_067_200_000_000_000
+        let ts_nanos: i64 = 1_704_067_200_000_000_000i64;
+        let key = s3_key("agent-01", "mydb", "cpu", ts_nanos);
+
+        let expected = "mydb/cpu/2024/01/01/00/agent-01_20240101_000000_000000000.parquet";
+        assert_eq!(key, expected);
+    }
+
+    #[test]
+    fn test_s3_key_verify_path_components_from_known_timestamp() {
+        // 2025-12-31 23:59:59.999999999 UTC = a known timestamp
+        // Let's compute it: 2025-12-31 23:59:59 UTC
+        let dt = chrono::NaiveDate::from_ymd_opt(2025, 12, 31)
+            .unwrap()
+            .and_hms_nano_opt(23, 59, 59, 999999999)
+            .unwrap();
+        let ts_nanos = dt.and_utc().timestamp_nanos_opt().unwrap();
+
+        let key = s3_key("agent-x", "testdb", "temperature", ts_nanos);
+
+        // Verify it starts with db/table and ends with .parquet
+        assert!(key.starts_with("testdb/temperature/"), "unexpected key: {key}");
+
+        // Verify the path contains the expected date/time parts
+        let parts: Vec<&str> = key.split('/').collect();
+        // Format: db/table/year/month/day/hour/agent_ts_nanos.parquet = 7 components
+        assert_eq!(parts.len(), 7, "expected 7 path components, got {}: {parts:?}", parts.len());
+        // parts[0] = "testdb", parts[1] = "temperature", parts[2] = "2025"
+        // parts[3] = "12", parts[4] = "31", parts[5] = "23"
+        assert_eq!(parts[2], "2025", "year should be 2025");
+        assert_eq!(parts[3], "12", "month should be 12");
+        assert_eq!(parts[4], "31", "day should be 31");
+        assert_eq!(parts[5], "23", "hour should be 23");
+
+        // The last segment should contain agent-x and end with .parquet
+        let last_part = parts[6];
+        assert!(last_part.starts_with("agent-x_"), "last part = {last_part}");
+        assert!(last_part.ends_with(".parquet"));
+    }
+
+    #[test]
+    fn test_s3_key_different_agent_ids_produce_different_paths() {
+        let ts_nanos: i64 = 1_704_067_200_000_000_000i64; // 2024-01-01 00:00:00
+
+        let key1 = s3_key("agent-alpha", "db1", "tbl1", ts_nanos);
+        let key2 = s3_key("agent-beta", "db1", "tbl1", ts_nanos);
+
+        assert_ne!(key1, key2);
+        assert!(key1.contains("agent-alpha"));
+        assert!(key2.contains("agent-beta"));
+
+        // All other components should be the same
+        let key1_no_agent = key1.replace("agent-alpha", "AGENT");
+        let key2_no_agent = key2.replace("agent-beta", "AGENT");
+        assert_eq!(key1_no_agent, key2_no_agent);
+    }
+
+    #[test]
+    fn test_s3_key_different_timestamps_produce_different_paths() {
+        let ts1: i64 = 1_704_067_200_000_000_000i64; // 2024-01-01
+        let ts2: i64 = 1_735_689_600_000_000_000i64; // 2025-01-01 (approx)
+
+        let key1 = s3_key("agent-01", "db1", "tbl1", ts1);
+        let key2 = s3_key("agent-01", "db1", "tbl1", ts2);
+
+        assert_ne!(key1, key2);
+        assert!(key1.contains("2024"));
+        assert!(key2.contains("2025"));
+    }
+}
