@@ -1,4 +1,5 @@
 pub mod chunk;
+pub mod query;
 
 use chunk::Table;
 use std::collections::HashMap;
