@@ -1,3 +1,4 @@
+mod agent;
 mod buffer;
 mod config;
 mod flush;
