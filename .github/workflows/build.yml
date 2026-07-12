@@ -132,11 +132,14 @@ jobs:
       - name: List artifacts
         run: ls -R
 
+      - uses: actions/checkout@v4
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             iedb-agent-aarch64-linux-musl/iedb-agent-aarch64
             iedb-agent-armv7-linux-musl/iedb-agent-armv7
-          draft: true
+            README.md
+          draft: false
           generate_release_notes: true
