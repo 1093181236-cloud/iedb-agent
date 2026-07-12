@@ -1,0 +1,134 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Native build + test (macOS ARM64)
+  native:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build (native)
+        run: cargo build --release
+
+      - name: Test
+        run: cargo test --release
+
+  # ARM64 (aarch64) cross-compile
+  arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Install cargo-zigbuild
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-arm64-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build (ARM64 musl, static)
+        run: cargo zigbuild --target aarch64-unknown-linux-musl --release
+
+      - name: Strip binary
+        run: |
+          cargo install cross-strip 2>/dev/null || true
+          aarch64-linux-gnu-strip target/aarch64-unknown-linux-musl/release/iedb-agent || true
+
+      - name: Upload ARM64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: iedb-agent-aarch64-linux-musl
+          path: target/aarch64-unknown-linux-musl/release/iedb-agent
+
+  # ARM32 (armv7) cross-compile
+  arm32:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-unknown-linux-musleabihf
+
+      - name: Install cargo-zigbuild
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-arm32-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build (ARM32 musl, static)
+        run: cargo zigbuild --target armv7-unknown-linux-musleabihf --release
+
+      - name: Strip binary
+        run: |
+          arm-linux-gnueabihf-strip target/armv7-unknown-linux-musleabihf/release/iedb-agent || true
+
+      - name: Upload ARM32 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: iedb-agent-armv7-linux-musl
+          path: target/armv7-unknown-linux-musleabihf/release/iedb-agent
+
+  # Release: create GitHub Release with binaries on tag push
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [native, arm64, arm32]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: List artifacts
+        run: ls -R
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            iedb-agent-aarch64-linux-musl/iedb-agent
+            iedb-agent-armv7-linux-musl/iedb-agent
+          draft: true
+          generate_release_notes: true
