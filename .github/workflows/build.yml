@@ -128,9 +128,12 @@ jobs:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
+        with:
+          pattern: 'iedb-agent-*'
+          merge-multiple: false
 
       - name: List artifacts
-        run: ls -R
+        run: ls -R iedb-agent-* || ls -R
 
       - uses: actions/checkout@v4
 
