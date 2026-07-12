@@ -68,16 +68,14 @@ jobs:
       - name: Build (ARM64 musl, static)
         run: cargo zigbuild --target aarch64-unknown-linux-musl --release
 
-      - name: Strip binary
-        run: |
-          cargo install cross-strip 2>/dev/null || true
-          aarch64-linux-gnu-strip target/aarch64-unknown-linux-musl/release/iedb-agent || true
+      - name: Rename binary
+        run: mv target/aarch64-unknown-linux-musl/release/iedb-agent target/aarch64-unknown-linux-musl/release/iedb-agent-aarch64
 
       - name: Upload ARM64 binary
         uses: actions/upload-artifact@v4
         with:
           name: iedb-agent-aarch64-linux-musl
-          path: target/aarch64-unknown-linux-musl/release/iedb-agent
+          path: target/aarch64-unknown-linux-musl/release/iedb-agent-aarch64
 
   # ARM32 (armv7) cross-compile
   arm32:
@@ -112,15 +110,14 @@ jobs:
       - name: Build (ARM32 musl, static)
         run: cargo zigbuild --target armv7-unknown-linux-musleabihf --release
 
-      - name: Strip binary
-        run: |
-          arm-linux-gnueabihf-strip target/armv7-unknown-linux-musleabihf/release/iedb-agent || true
+      - name: Rename binary
+        run: mv target/armv7-unknown-linux-musleabihf/release/iedb-agent target/armv7-unknown-linux-musleabihf/release/iedb-agent-armv7
 
       - name: Upload ARM32 binary
         uses: actions/upload-artifact@v4
         with:
           name: iedb-agent-armv7-linux-musl
-          path: target/armv7-unknown-linux-musleabihf/release/iedb-agent
+          path: target/armv7-unknown-linux-musleabihf/release/iedb-agent-armv7
 
   # Release: create GitHub Release with binaries on tag push
   release:
@@ -139,7 +136,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            iedb-agent-aarch64-linux-musl/iedb-agent
-            iedb-agent-armv7-linux-musl/iedb-agent
+            iedb-agent-aarch64-linux-musl/iedb-agent-aarch64
+            iedb-agent-armv7-linux-musl/iedb-agent-armv7
           draft: true
           generate_release_notes: true
