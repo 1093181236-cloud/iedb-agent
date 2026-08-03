@@ -10,6 +10,7 @@ pub async fn upload_parquet(
     db: &str,
     table: &str,
     data: &[u8],
+    auth_header: Option<&str>,
 ) -> Result<(), UploadError> {
     let url = format!(
         "{}/api/v1/ingest/parquet?db={}&measurement={}",
@@ -18,10 +19,14 @@ pub async fn upload_parquet(
         urlencoding(table)
     );
 
-    let resp = client
+    let mut req = client
         .post(&url)
         .header("Content-Type", "application/octet-stream")
-        .body(data.to_vec())
+        .body(data.to_vec());
+    if let Some(h) = auth_header {
+        req = req.header("Authorization", h);
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| UploadError::Http(e.to_string()))?;

@@ -71,6 +71,15 @@ pub struct S3Config {
 #[derive(Debug, Clone, Deserialize)]
 pub struct IotedgedbConfig {
     pub url: String,
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+impl IotedgedbConfig {
+    /// Returns the Authorization header value if a token is configured.
+    pub fn auth_header(&self) -> Option<String> {
+        self.token.as_ref().map(|t| format!("Bearer {}", t))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

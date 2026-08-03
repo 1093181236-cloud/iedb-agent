@@ -195,11 +195,14 @@ async fn retry_staging_files(
                                                 urlencoding(&db),
                                                 urlencoding(&table),
                                             );
-                                            match client.post(&url)
+                                            let auth_header = config.iotedgedb.auth_header();
+                                            let mut req = client.post(&url)
                                                 .header("Content-Type", "application/octet-stream")
-                                                .body(data)
-                                                .send()
-                                                .await
+                                                .body(data);
+                                            if let Some(ref h) = auth_header {
+                                                req = req.header("Authorization", h);
+                                            }
+                                            match req.send().await
                                             {
                                                 Ok(resp) if resp.status().is_success() => {
                                                     let _ = std::fs::remove_file(&path);

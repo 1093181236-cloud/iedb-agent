@@ -15,6 +15,7 @@ memory_limit = "512MB"
 
 [iotedgedb]
 url = "http://localhost:8000"
+# token = "iedb_xxxxxxxxxxxxxxxxxxxx"   # Bearer token for auth-enabled iotedgedb
 
 [agent]
 id = "agent-01"

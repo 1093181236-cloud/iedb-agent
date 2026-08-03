@@ -42,7 +42,11 @@ impl AgentClient {
         };
 
         let url = format!("{}/api/v1/agents/register", self.config.iotedgedb.url);
-        let resp = self.client.post(&url).json(&body).send().await
+        let mut req = self.client.post(&url).json(&body);
+        if let Some(header) = self.config.iotedgedb.auth_header() {
+            req = req.header("Authorization", &header);
+        }
+        let resp = req.send().await
             .map_err(|e| format!("register: {}", e))?;
 
         if resp.status().is_success() {
@@ -64,7 +68,11 @@ impl AgentClient {
         };
 
         let url = format!("{}/api/v1/agents/heartbeat", self.config.iotedgedb.url);
-        let resp = self.client.post(&url).json(&body).send().await
+        let mut req = self.client.post(&url).json(&body);
+        if let Some(header) = self.config.iotedgedb.auth_header() {
+            req = req.header("Authorization", &header);
+        }
+        let resp = req.send().await
             .map_err(|e| format!("heartbeat: {}", e))?;
 
         if resp.status().is_success() {

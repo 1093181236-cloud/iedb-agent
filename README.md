@@ -96,6 +96,7 @@ memory_limit = "512MB"           # Max in-memory buffer; triggers force-snapshot
 # HTTP mode (default, no S3 needed)
 [iotedgedb]
 url = "http://iotededb:8000"
+# token = "iedb_xxxxxxxxxxxxxxxxxxxx"   # Bearer token (required when iotedgedb auth is enabled)
 
 # S3 mode (multi-agent production)
 [s3]
@@ -223,8 +224,15 @@ iedb-agent
 ### Deploy with iotededb (end-to-end test)
 
 ```bash
-# 1. Start iotededb (with auth disabled)
-IEDB_AUTH_ENABLED=false iedb serve --config iedb.toml
+# 1. Start iotededb
+iedb serve --config iedb.toml
+
+# 1a. If auth is enabled, create an agent token:
+curl -X POST "http://IOTEDGEDB_IP:8000/api/v1/auth/tokens" \
+  -H "Authorization: Bearer <admin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "edge-agent-01", "permissions": ["write"], "expires_in": "365d"}'
+# Add the returned token to iedb-agent.toml: [iotedgedb] token = "..."
 
 # 2. Start iedb-agent on ARM32 device
 # 3. Write test data

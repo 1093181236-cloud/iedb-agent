@@ -150,6 +150,7 @@ impl SnapshotScheduler {
                         db_name,
                         table_name,
                         &parquet_data,
+                        self.config.iotedgedb.auth_header().as_deref(),
                     )
                     .await
                     {
