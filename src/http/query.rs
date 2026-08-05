@@ -34,8 +34,12 @@ impl QueryHandler {
             }
         };
 
-        let start_ns = get("start").and_then(|s| s.parse::<i64>().ok());
-        let end_ns = get("end").and_then(|s| s.parse::<i64>().ok());
+        let start_us = get("start").and_then(|s| s.parse::<i64>().ok());
+        let end_us = get("end").and_then(|s| s.parse::<i64>().ok());
+
+        // Convert µs query params to ns for internal buffer comparison
+        let start_ns = start_us.map(|v| v * 1_000);
+        let end_ns = end_us.map(|v| v * 1_000);
 
         let _tag_key: Option<String> = get("tag").and_then(|s| {
             let parts: Vec<&str> = s.splitn(2, '=').collect();

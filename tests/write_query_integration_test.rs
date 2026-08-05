@@ -191,9 +191,7 @@ async fn test_write_and_query_basic() {
     // Query back
     let rows = query_rows(&h, "db=testdb&table=cpu").await;
     assert_eq!(rows.len(), 1, "expected 1 row");
-    assert_eq!(rows[0]["time"], 1700000000000000000i64);
-    // Note: field names within LP parsing are not yet plumbed through to
-    // schema, so the field key will be "". The value is still correct.
+    assert_eq!(rows[0]["time"], 1700000000000000i64);  // ns/1000 → µs
     let fields = rows[0]["fields"].as_object().unwrap();
     assert!(!fields.is_empty(), "should have at least one field");
     let first_val = fields.values().next().unwrap();
@@ -240,8 +238,8 @@ async fn test_write_with_tags() {
 
     let rows = query_rows(&h, "db=testdb&table=cpu").await;
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0]["time"], 1700000000000000000i64);
-    assert_eq!(rows[1]["time"], 1700000000000000001i64);
+    assert_eq!(rows[0]["time"], 1700000000000000i64);  // ns/1000 → µs
+    assert_eq!(rows[1]["time"], 1700000000000000i64);  // 1 ns diff lost in µs truncation
 }
 
 // ── Test 4: write at different times → query with time range ───────────
@@ -250,8 +248,8 @@ async fn test_write_with_tags() {
 async fn test_write_and_query_time_range() {
     let h = Harness::new().await;
 
-    let t0 = 1_700_000_000_000_000_000i64;
-    let t1 = t0 + 1_000_000_000;
+    let t0 = 1_700_000_000_000_000_000i64;  // ns
+    let t1 = t0 + 1_000_000_000;             // +1s in ns
     let t2 = t0 + 2_000_000_000;
     let t3 = t0 + 3_000_000_000;
 
@@ -267,11 +265,13 @@ async fn test_write_and_query_time_range() {
     )
     .await;
 
-    // Query with time range [t1 .. t2]
-    let rows = query_rows(&h, &format!("db=testdb&table=cpu&start={t1}&end={t2}")).await;
+    // Query params now in µs: t1_us = t1/1000, etc.
+    let t1_us = t1 / 1_000;
+    let t2_us = t2 / 1_000;
+    let rows = query_rows(&h, &format!("db=testdb&table=cpu&start={t1_us}&end={t2_us}")).await;
     assert_eq!(rows.len(), 2, "expected 2 rows in time range");
-    assert_eq!(rows[0]["time"], t1);
-    assert_eq!(rows[1]["time"], t2);
+    assert_eq!(rows[0]["time"], t1_us);
+    assert_eq!(rows[1]["time"], t2_us);
 
     // Query with time range before all data
     let rows = query_rows(&h, "db=testdb&table=cpu&start=1&end=100").await;
@@ -372,7 +372,7 @@ async fn test_write_bad_line_protocol_partial() {
 
     let rows = query_rows(&h, "db=testdb&table=cpu").await;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["time"], 1700000000000000000i64);
+    assert_eq!(rows[0]["time"], 1700000000000000i64);  // ns/1000 → µs
 }
 
 // ── Test 10: query with missing table param ────────────────────────────

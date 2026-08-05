@@ -68,9 +68,10 @@ pub fn flush_chunks_to_parquet(table: &Table, chunks: &[&Chunk]) -> Result<Vec<u
             .ok_or_else(|| "unexpected end of columns".to_string())?;
 
         match col_idx {
-            // Column 0: time (required int64, non-nullable)
+            // Column 0: time (required int64, microseconds since epoch)
+            // Internal buffer stores nanoseconds; convert to microseconds for iotedgedb compatibility.
             0 => {
-                let vals: Vec<i64> = all_rows.iter().map(|r| r.time).collect();
+                let vals: Vec<i64> = all_rows.iter().map(|r| r.time / 1_000).collect();
                 col_writer
                     .typed::<Int64Type>()
                     .write_batch(&vals, None, None)
@@ -233,17 +234,17 @@ mod tests {
 
         let mut chunk = Chunk::new(0);
         chunk.rows.push(Row {
-            time: 100,
+            time: 100_000_000,  // 100 ms in ns → 100000 µs in parquet
             tag_values: vec!["srv01".to_string()],
             field_values: vec![Some(FieldValue::F64(0.5)), Some(FieldValue::F64(0.8))],
         });
         chunk.rows.push(Row {
-            time: 200,
+            time: 200_000_000,  // → 200000 µs
             tag_values: vec!["srv02".to_string()],
             field_values: vec![Some(FieldValue::F64(0.3)), Some(FieldValue::F64(0.6))],
         });
         chunk.rows.push(Row {
-            time: 300,
+            time: 300_000_000,  // → 300000 µs
             tag_values: vec!["srv01".to_string()],
             field_values: vec![Some(FieldValue::F64(0.9)), Some(FieldValue::F64(0.95))],
         });
@@ -274,20 +275,20 @@ mod tests {
         while let Some(row) = row_iter.next() {
             let row = row.expect("read row");
             if row_count == 0 {
-                // time=100, host=srv01, cpu=0.5, mem=0.8
-                assert_eq!(row.get_long(0).expect("get_long"), 100);
+                // time=100_000_000 ns → 100000 µs in parquet
+                assert_eq!(row.get_long(0).expect("get_long"), 100_000);
                 let host = row.get_string(1).expect("host");
                 assert_eq!(host.as_str(), "srv01");
                 assert!((row.get_double(2).expect("cpu") - 0.5).abs() < 0.001);
                 assert!((row.get_double(3).expect("mem") - 0.8).abs() < 0.001);
             } else if row_count == 1 {
-                assert_eq!(row.get_long(0).expect("get_long"), 200);
+                assert_eq!(row.get_long(0).expect("get_long"), 200_000);
                 let host = row.get_string(1).expect("host");
                 assert_eq!(host.as_str(), "srv02");
                 assert!((row.get_double(2).expect("cpu") - 0.3).abs() < 0.001);
                 assert!((row.get_double(3).expect("mem") - 0.6).abs() < 0.001);
             } else if row_count == 2 {
-                assert_eq!(row.get_long(0).expect("get_long"), 300);
+                assert_eq!(row.get_long(0).expect("get_long"), 300_000);
                 let host = row.get_string(1).expect("host");
                 assert_eq!(host.as_str(), "srv01");
                 assert!((row.get_double(2).expect("cpu") - 0.9).abs() < 0.001);

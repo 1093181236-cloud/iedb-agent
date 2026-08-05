@@ -97,8 +97,8 @@ pub fn compute_table_changes(
     for (db_name, tables) in &buffer.databases {
         for (table_name, table) in tables {
             let key = format!("{}.{}", db_name, table_name);
-            let min_time = table.chunks.iter().map(|c| c.time_min).min().unwrap_or(0);
-            let max_time = table.chunks.iter().map(|c| c.time_max).max().unwrap_or(0);
+            let min_time = table.chunks.iter().map(|c| c.time_min).min().unwrap_or(0) / 1_000;
+            let max_time = table.chunks.iter().map(|c| c.time_max).max().unwrap_or(0) / 1_000;
             let row_count: usize = table.chunks.iter().map(|c| c.rows.len()).sum();
 
             let prev = last_state.get(&key);
@@ -201,11 +201,11 @@ mod tests {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].db, "mydb");
         assert_eq!(changes[0].table, "cpu");
-        assert_eq!(changes[0].min_time, 100);
-        assert_eq!(changes[0].max_time, 200);
+        assert_eq!(changes[0].min_time, 0);   // 100 ns / 1000 → 0 µs
+        assert_eq!(changes[0].max_time, 0);   // 200 ns / 1000 → 0 µs
         assert_eq!(changes[0].row_count, 2);
         // last_state is updated
-        assert_eq!(last_state.get("mydb.cpu"), Some(&(100, 200, 2)));
+        assert_eq!(last_state.get("mydb.cpu"), Some(&(0, 0, 2)));
     }
 
     #[test]

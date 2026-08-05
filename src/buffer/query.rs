@@ -67,7 +67,7 @@ pub fn query_table(
             }
 
             results.push(QueryRow {
-                time: row.time,
+                time: row.time / 1_000,  // ns → µs for iotedgedb compatibility
                 tags,
                 fields,
             });

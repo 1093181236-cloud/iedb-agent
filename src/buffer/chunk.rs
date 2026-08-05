@@ -222,34 +222,34 @@ mod tests {
 
         // Row 0: host=srv01, time=100, cpu=0.5, mem=0.8
         let row0 = Row {
-            time: 100,
+            time: 100_000,  // ns → 100 µs in query output
             tag_values: vec!["srv01".to_string()],
             field_values: vec![Some(FieldValue::F64(0.5)), Some(FieldValue::F64(0.8))],
         };
         chunk.rows.push(row0);
         table.build_tag_index(&mut chunk, 0, &["srv01".to_string()]);
 
-        // Row 1: host=srv02, time=200, cpu=0.3, mem=0.6
+        // Row 1: host=srv02, time=200_000 ns → 200 µs
         let row1 = Row {
-            time: 200,
+            time: 200_000,
             tag_values: vec!["srv02".to_string()],
             field_values: vec![Some(FieldValue::F64(0.3)), Some(FieldValue::F64(0.6))],
         };
         chunk.rows.push(row1);
         table.build_tag_index(&mut chunk, 1, &["srv02".to_string()]);
 
-        // Row 2: host=srv01, time=300, cpu=0.9, mem=0.95
+        // Row 2: host=srv01, time=300_000 ns → 300 µs
         let row2 = Row {
-            time: 300,
+            time: 300_000,
             tag_values: vec!["srv01".to_string()],
             field_values: vec![Some(FieldValue::F64(0.9)), Some(FieldValue::F64(0.95))],
         };
         chunk.rows.push(row2);
         table.build_tag_index(&mut chunk, 2, &["srv01".to_string()]);
 
-        // Row 3: host=srv03, time=400, cpu=0.1, mem=0.2
+        // Row 3: host=srv03, time=400_000 ns → 400 µs
         let row3 = Row {
-            time: 400,
+            time: 400_000,
             tag_values: vec!["srv03".to_string()],
             field_values: vec![Some(FieldValue::F64(0.1)), Some(FieldValue::F64(0.2))],
         };
@@ -257,8 +257,8 @@ mod tests {
         table.build_tag_index(&mut chunk, 3, &["srv03".to_string()]);
 
         // Set time bounds on the chunk explicitly
-        chunk.time_min = 100;
-        chunk.time_max = 400;
+        chunk.time_min = 100_000;
+        chunk.time_max = 400_000;
 
         table.chunks.push(chunk);
         table
@@ -279,8 +279,8 @@ mod tests {
     #[test]
     fn test_time_range_filter() {
         let table = make_test_table();
-        let results = query_table(&table, Some(150), Some(350), None, None);
-        // Should match rows 1 and 2 (time 200 and 300)
+        let results = query_table(&table, Some(150_000), Some(350_000), None, None);
+        // Should match rows 1 and 2 (time 200_000 and 300_000 ns → 200 and 300 µs)
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].time, 200);
         assert_eq!(results[1].time, 300);
@@ -289,8 +289,8 @@ mod tests {
     #[test]
     fn test_tag_and_time_filter() {
         let table = make_test_table();
-        let results = query_table(&table, Some(50), Some(250), Some("host"), Some("srv01"));
-        // Should match only row 0: host=srv01, time=100 (row 2 has time=300, out of range)
+        let results = query_table(&table, Some(50_000), Some(250_000), Some("host"), Some("srv01"));
+        // Should match only row 0: host=srv01, time=100_000 ns → 100 µs (row 2 has time=300_000, out of range)
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].time, 100);
         assert_eq!(results[0].tags.get("host").unwrap(), "srv01");
