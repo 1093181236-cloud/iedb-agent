@@ -85,6 +85,11 @@ impl IotedgedbConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AgentConfig {
     pub id: String,
+    /// Optional externally-reachable URL of this agent, advertised to
+    /// iotedgedb (register + heartbeat) for query routing. Falls back to
+    /// `http://localhost:{server.port}` when not set.
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 impl Config {

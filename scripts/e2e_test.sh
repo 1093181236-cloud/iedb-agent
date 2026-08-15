@@ -56,15 +56,15 @@ agent_write() {
     echo "${http_code} ${body}"
 }
 
-# 查询 agent 内存缓冲
+# 查询 agent 内存缓冲（永不失败，agent 停机时返回空 JSON）
 agent_query() {
     local params="$1"
-    curl -s "${AGENT}/query?${params}"
+    curl -s -m 5 "${AGENT}/query?${params}" 2>/dev/null || echo '{"rows":[]}'
 }
 
-# 查询 agent 健康状态
+# 查询 agent 健康状态（永不失败，agent 停机时返回 000）
 agent_health() {
-    curl -s -o /dev/null -w '%{http_code}' "${AGENT}/health"
+    curl -s -m 5 -o /dev/null -w '%{http_code}' "${AGENT}/health" 2>/dev/null || echo "000"
 }
 
 # 向 iotedgedb 发送 SQL 查询
@@ -92,8 +92,8 @@ if ! ${SSH_CMD} -o ConnectTimeout=5 "${ARM32_USER}@${ARM32_HOST}" "echo ok" > /d
 fi
 pass "SSH to ${ARM32_HOST} OK"
 
-# 停止旧进程（如果存在）
-${SSH_CMD} "${ARM32_USER}@${ARM32_HOST}" "pkill iedb-agent || true" 2>/dev/null || true
+# 停止旧进程（如果存在）。-x 精确匹配进程名，避免误杀设备上其他含 "iedb-agent" 字样的进程
+${SSH_CMD} "${ARM32_USER}@${ARM32_HOST}" "pkill -x iedb-agent || true" 2>/dev/null || true
 sleep 1
 
 # 上传二进制（如果本地有交叉编译产物）
@@ -253,8 +253,11 @@ CPU_COUNT_AFTER=$(json_row_count "$CPU_ROWS_AFTER")
 echo "  cpu table: ${CPU_COUNT_AFTER} rows remaining in buffer"
 
 # 注意：30s 快照只刷写 30 秒前的 Chunk，最近 30 秒的数据仍在内存中
-if [ "$CPU_COUNT_AFTER" -ge 0 ]; then
-    pass "Query still functional after flush"
+# 快照后缓冲行数应小于等于快照前（部分数据已刷走）
+if [ "$CPU_COUNT_AFTER" -le "$CPU_COUNT" ]; then
+    pass "Query functional after flush (${CPU_COUNT_AFTER} <= ${CPU_COUNT})"
+else
+    fail "Unexpected row growth after flush: ${CPU_COUNT} -> ${CPU_COUNT_AFTER}"
 fi
 
 # ── Step 6: 从 iotedgedb 查询全量数据 ────────────────────────
@@ -277,7 +280,6 @@ fi
 
 info "Step 7: Write fresh data after snapshot"
 
-NOW_NS=$(date +%s)000000000
 LP_NEW="cpu,host=srv04,region=ap-south usage=99.99,sys=1.20"
 RESULT=$(agent_write "$TEST_DB" "$LP_NEW")
 echo "  New write: ${RESULT}"

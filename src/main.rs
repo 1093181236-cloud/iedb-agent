@@ -41,7 +41,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     // Register agent
-    let agent_addr = format!("http://localhost:{}", config.server.port);
+    let agent_addr = config
+        .agent
+        .url
+        .clone()
+        .unwrap_or_else(|| format!("http://localhost:{}", config.server.port));
     let agent_client = Arc::new(agent::AgentClient {
         config: config.clone(),
         client: client.clone(),

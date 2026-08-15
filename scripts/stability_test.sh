@@ -65,11 +65,13 @@ cleanup() {
     printf "  Duration:       %02dh %02dm %02ds\n" "$hours" "$mins" "$secs"
     echo "  Total batches:  ${TOTAL_BATCHES}"
     echo "  Total rows:     ${TOTAL_ROWS}"
+    echo "  Total bytes:    ${TOTAL_BYTES}"
     echo "  Success:        ${SUCCESS_COUNT}"
     echo "  Errors:         ${ERROR_COUNT}"
     if [ "$TOTAL_BATCHES" -gt 0 ]; then
         local rate
-        rate=$(awk "BEGIN { printf \"%.2f\", ${TOTAL_BATCHES} / ${elapsed} }")
+        # max(elapsed, 1) 防止运行不足 1 秒时 awk 除零
+        rate=$(awk "BEGIN { printf \"%.2f\", ${TOTAL_BATCHES} / (${elapsed} > 1 ? ${elapsed} : 1) }")
         echo "  Avg rate:       ${rate} batches/s"
         local success_rate
         success_rate=$(awk "BEGIN { printf \"%.2f\", ${SUCCESS_COUNT} * 100.0 / ${TOTAL_BATCHES} }")
