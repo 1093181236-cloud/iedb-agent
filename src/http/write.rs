@@ -178,7 +178,7 @@ impl WriteHandler {
         }
 
         // Buffer all batches to WAL and flush synchronously (C1 fix: single write path)
-        let ops = {
+        let (wal_seq, ops) = {
             let mut wal = self.wal.lock().await;
             for batch in &batches {
                 if let Err(e) = wal.buffer_op(WalOp::Write(batch.clone())) {
@@ -189,7 +189,7 @@ impl WriteHandler {
                 }
             }
             match wal.flush().await {
-                Ok(ops) => ops,
+                Ok((seq, ops)) => (seq, ops),
                 Err(e) => {
                     return Ok(Response::builder()
                         .status(StatusCode::SERVICE_UNAVAILABLE)
@@ -204,7 +204,7 @@ impl WriteHandler {
             let mut buf = self.buffer.lock().await;
             for op in &ops {
                 if let WalOp::Write(batch) = op {
-                    apply_write_batch(&mut buf, batch, 0);
+                    apply_write_batch(&mut buf, batch, wal_seq);
                 }
             }
         }

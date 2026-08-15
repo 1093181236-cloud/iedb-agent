@@ -62,36 +62,39 @@ impl WalManager {
         Ok(())
     }
 
-    /// Block until the WAL file is persisted. Returns the ops to be applied to the Buffer.
-    pub async fn flush(&mut self) -> Result<Vec<WalOp>, WalError> {
+    /// Block until the WAL file is persisted.
+    /// Returns (seq, ops): the sequence number of the written WAL file and
+    /// the ops to be applied to the Buffer.
+    pub async fn flush(&mut self) -> Result<(u64, Vec<WalOp>), WalError> {
         if self.pending_ops.is_empty() {
-            return Ok(Vec::new());
+            return Ok((0, Vec::new()));
         }
 
         let ops = std::mem::take(&mut self.pending_ops);
         self.op_count = 0;
+        let seq = self.current_seq;
 
         let contents = WalContents {
-            wal_file_number: self.current_seq,
+            wal_file_number: seq,
             ops: ops.clone(),
             persist_timestamp_ms: chrono::Utc::now().timestamp_millis(),
         };
 
         let data = contents.serialize_to_file();
-        let path = self.wal_file_path(self.current_seq);
+        let path = self.wal_file_path(seq);
         tokio::fs::write(&path, &data).await.map_err(|e| {
-            WalError::WriteError(format!("write WAL {}: {}", self.current_seq, e))
+            WalError::WriteError(format!("write WAL {}: {}", seq, e))
         })?;
 
         tracing::debug!(
-            seq = self.current_seq,
+            seq = seq,
             ops = contents.ops.len(),
             bytes = data.len(),
             "WAL file flushed"
         );
 
         self.current_seq += 1;
-        Ok(ops)
+        Ok((seq, ops))
     }
 
     /// Replay WAL files after startup, applying their ops to the given buffer.
@@ -307,8 +310,9 @@ mod tests {
         }
         assert_eq!(wm.op_count, 5);
 
-        // Flush returns the ops and resets state
-        let ops = wm.flush().await.unwrap();
+        // Flush returns (seq, ops) and resets state
+        let (seq, ops) = wm.flush().await.unwrap();
+        assert_eq!(seq, 1);
         assert_eq!(ops.len(), 5);
         // After flush, op_count and pending_ops are reset
         assert_eq!(wm.op_count, 0);
@@ -331,7 +335,8 @@ mod tests {
         };
         let mut wm = WalManager::new(&tmp, &config).await.unwrap();
 
-        let ops = wm.flush().await.unwrap();
+        let (seq, ops) = wm.flush().await.unwrap();
+        assert_eq!(seq, 0);
         assert!(ops.is_empty());
 
         let _ = std::fs::remove_dir_all(&tmp);

@@ -70,11 +70,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             interval.tick().await;
             match wal_flush.lock().await.flush().await {
-                Ok(ops) => {
+                Ok((seq, ops)) => {
                     for op in ops {
                         if let wal::WalOp::Write(batch) = op {
                             let mut buf = wal_flush_buffer.lock().await;
-                            wal::wal_core::apply_write_batch(&mut buf, &batch, 0);
+                            wal::wal_core::apply_write_batch(&mut buf, &batch, seq);
                         }
                     }
                 }

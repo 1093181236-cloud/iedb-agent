@@ -15,6 +15,7 @@ struct RegisterRequest {
 #[derive(Debug, Serialize)]
 struct HeartbeatRequest {
     id: String,
+    url: String,
     tables_changed: Vec<TableChange>,
 }
 
@@ -64,6 +65,7 @@ impl AgentClient {
     ) -> Result<(), String> {
         let body = HeartbeatRequest {
             id: self.config.agent.id.clone(),
+            url: self.agent_url.clone(),
             tables_changed,
         };
 
